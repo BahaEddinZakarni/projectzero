@@ -18,15 +18,15 @@ admin.initializeApp({
 });
 const db = admin.database();
 
-// --- 3. MQTT SETTINGS (The "Anti-Ghosting" Config) ---
+// --- 3. MQTT SETTINGS ---
 const mqttOptions = {
   username: 'esp32_worker',
   password: 'ParkMaster2026',
-  keepalive: 10,           // Very frequent pings (every 10s)
-  reconnectPeriod: 2000,   // Rapid reconnect
+  keepalive: 10,           
+  reconnectPeriod: 2000,   
   connectTimeout: 30000,
-  clean: true,             // Wipe old session data to prevent ghosting
-  clientId: 'bridge_' + Math.random().toString(16).substring(2, 10) // Always unique
+  clean: true,             
+  clientId: 'bridge_' + Math.random().toString(16).substring(2, 10) 
 };
 
 const client = mqtt.connect("wss://c335c915f7a540bcb9d83b6f4b0444f3.s1.eu.hivemq.cloud:8884/mqtt", mqttOptions);
@@ -36,25 +36,15 @@ client.on('connect', () => {
   client.subscribe('city/street1/+/status');
 });
 
-// If the bridge stays silent too long, Render might throttle it.
-// This sends a tiny "nothing" message to HiveMQ to keep the pipe open.
-setInterval(() => {
-  if (client.connected) {
-    client.publish('bridge/heartbeat', 'stay_alive');
-  }
-}, 30000); 
-
 client.on('message', async (topic, message) => {
   try {
     const data = JSON.parse(message.toString());
     const macId = data.id;
 
-    // Revenue Update
     if (data.pay && data.pay > 0) {
         await db.ref('global_stats/totalRevenue').transaction(c => (c || 0) + data.pay);
     }
 
-    // Status Update
     await db.ref('meters/' + macId).update({ 
         remA: data.remA, locA: data.locA,
         remB: data.remB, locB: data.locB,
