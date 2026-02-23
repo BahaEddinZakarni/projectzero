@@ -1,0 +1,179 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h> 
+#include <TM1637Display.h>
+
+// --- WIFI & HIVEMQ SETTINGS ---
+const char* ssid     = "Zakarni";
+const char* password = "59555912345";
+const char* mqtt_server = "c335c915f7a540bcb9d83b6f4b0444f3.s1.eu.hivemq.cloud"; 
+const char* mqtt_user   = "esp32_worker";                  
+const char* mqtt_pass   = "ParkMaster2026";                
+const int   mqtt_port   = 8883;                            
+
+String meterID = ""; 
+const int CLK_A = 18; const int DIO_A = 19; const int COIN_A = 16;
+const int CLK_B = 22; const int DIO_B = 23; const int COIN_B = 17;
+
+long remainingA = 0; long remainingB = 0;
+bool isActiveA = false; bool isActiveB = false; 
+unsigned long lastTick = 0;
+long lastValA = -999; long lastValB = -999;
+int idleSecA = 0; int idleSecB = 0;
+bool isLocA = false; bool isLocB = false;
+
+int pendingPay = 0; 
+
+// NEW: Watchdog Timer Variable
+unsigned long lastSuccessfulCloudUpdate = 0; 
+
+volatile int pulseCountA = 0; volatile int pulseCountB = 0;
+unsigned long lastPulseTimeA = 0; unsigned long lastPulseTimeB = 0;
+static portMUX_TYPE mux = portMUX_INITIALIZER_UNLOCKED;
+
+TM1637Display displayA(CLK_A, DIO_A);
+TM1637Display displayB(CLK_B, DIO_B);
+WiFiClientSecure net;
+PubSubClient client(net);
+
+void callback(char* topic, byte* payload, unsigned length) {
+  String msg = "";
+  for (int i = 0; i < length; i++) msg += (char)payload[i];
+  
+  if (msg.startsWith("add:")) {
+    int colonIdx = msg.indexOf(':');
+    char slot = msg.charAt(msg.length() - 1);
+    long secs = msg.substring(colonIdx + 1, msg.length() - 1).toInt();
+    if (slot == 'A') { if(remainingA < 0) remainingA = 0; remainingA += secs; isActiveA = true; isLocA = false; }
+    if (slot == 'B') { if(remainingB < 0) remainingB = 0; remainingB += secs; isActiveB = true; isLocB = false; }
+  }
+  
+  if (msg == "resetA")    { remainingA = 0; isActiveA = false; isLocA = false; }
+  if (msg == "resetB")    { remainingB = 0; isActiveB = false; isLocB = false; }
+  if (msg == "forceLocA") { remainingA = 0; isActiveA = true; isLocA = true; idleSecA = 999; }
+  if (msg == "forceLocB") { remainingB = 0; isActiveB = true; isLocB = true; idleSecB = 999; }
+}
+
+void updatePhysicalDisplay(TM1637Display &disp, long rem, bool loc) {
+  if(loc) { uint8_t SEG_LOC[] = {0x38, 0x3f, 0x39, 0x00}; disp.setSegments(SEG_LOC); return; }
+  long absS = abs(rem);
+  int hh = absS / 3600; int mm = (absS % 3600) / 60; int ss = absS % 60;
+  if (rem < 0) {
+    uint8_t d[4] = { 0x40, disp.encodeDigit(mm % 10), disp.encodeDigit(ss / 10), disp.encodeDigit(ss % 10) };
+    disp.setSegments(d);
+  } else if (hh > 0) {
+    disp.showNumberDecEx((hh * 100) + mm, 0b01000000, true);
+  } else {
+    disp.showNumberDec((mm * 100) + ss, true);
+  }
+}
+
+void connectToHiveMQ() {
+  net.setInsecure();
+  client.setServer(mqtt_server, mqtt_port);
+  client.setCallback(callback);
+  while (!client.connected()) {
+    if (client.connect(meterID.c_str(), mqtt_user, mqtt_pass)) {
+      client.subscribe(("city/street1/" + meterID + "/cmd").c_str());
+    } else { delay(5000); }
+  }
+}
+
+// FIXED: Reduced debounce from 200ms to 50ms to ensure fast pulses aren't ignored
+void IRAM_ATTR onPulseA() { unsigned long n=millis(); if(n-lastPulseTimeA>50){ pulseCountA++; lastPulseTimeA=n; } }
+void IRAM_ATTR onPulseB() { unsigned long n=millis(); if(n-lastPulseTimeB>50){ pulseCountB++; lastPulseTimeB=n; } }
+
+void setup() {
+  Serial.begin(115200);
+  displayA.setBrightness(0x0f); displayB.setBrightness(0x0f);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) { delay(500); }
+  meterID = WiFi.macAddress(); meterID.replace(":", ""); 
+  connectToHiveMQ();
+  pinMode(COIN_A, INPUT_PULLUP); attachInterrupt(digitalPinToInterrupt(COIN_A), onPulseA, FALLING);
+  pinMode(COIN_B, INPUT_PULLUP); attachInterrupt(digitalPinToInterrupt(COIN_B), onPulseB, FALLING);
+  
+  // Start the watchdog timer cleanly
+  lastSuccessfulCloudUpdate = millis(); 
+}
+
+void loop() {
+  // --- 1. NEW: WATCHDOG TIMER FOR GHOST DISCONNECTS ---
+  if (millis() - lastSuccessfulCloudUpdate > 30000 && lastSuccessfulCloudUpdate != 0) {
+      Serial.println("⚠️ WATCHDOG: Connection frozen. Forcing Wi-Fi reset...");
+      client.disconnect();
+      WiFi.disconnect();
+      delay(1000);
+      lastSuccessfulCloudUpdate = millis(); // Reset timer so it doesn't loop infinitely
+  }
+
+  // Ensure Wi-Fi is connected BEFORE trying MQTT to avoid CPU freezes
+  if (WiFi.status() != WL_CONNECTED) { WiFi.begin(ssid, password); } 
+  if (!client.connected() && WiFi.status() == WL_CONNECTED) connectToHiveMQ();
+  client.loop();
+
+  // --- 2. FAST-COIN A (Reduced from 600ms to 250ms) ---
+  if (pulseCountA > 0 && (millis() - lastPulseTimeA > 250)) {
+    portENTER_CRITICAL(&mux); int c = pulseCountA; pulseCountA = 0; portEXIT_CRITICAL(&mux);
+    long added = (c==2?1800:c==4?3600:c==6?9000:c==10?18000:0);
+    int pay = (c==2?1:c==4?2:c==6?5:c==10?10:0); 
+    if(added > 0) { 
+        if(remainingA < 0) remainingA = 0; 
+        remainingA += added; isActiveA = true; isLocA = false; 
+        pendingPay += pay; 
+    }
+  }
+
+  // --- 3. FAST-COIN B (Reduced from 600ms to 250ms) ---
+  if (pulseCountB > 0 && (millis() - lastPulseTimeB > 250)) {
+    portENTER_CRITICAL(&mux); int c = pulseCountB; pulseCountB = 0; portEXIT_CRITICAL(&mux);
+    long added = (c==2?1800:c==4?3600:c==6?9000:c==10?18000:0);
+    int pay = (c==2?1:c==4?2:c==6?5:c==10?10:0); 
+    if(added > 0) { 
+        if(remainingB < 0) remainingB = 0; 
+        remainingB += added; isActiveB = true; isLocB = false; 
+        pendingPay += pay;
+    }
+  }
+
+  // --- 4. TICK LOGIC & CLOUD PUBLISH ---
+  if (millis() - lastTick >= 1000) {
+    lastTick = millis();
+    
+    // Timer A
+    if (isActiveA && !isLocA) {
+      if (remainingA > 0) remainingA--;
+      else if (remainingA == 0) remainingA = -1;
+      else if (remainingA < 0 && remainingA > -60) remainingA--;
+    }
+    if(remainingA == lastValA && isActiveA && !isLocA) { idleSecA++; if(idleSecA >= 60) isLocA = true; } 
+    else if (!isLocA) { idleSecA = 0; }
+    lastValA = remainingA;
+
+    // Timer B
+    if (isActiveB && !isLocB) {
+      if (remainingB > 0) remainingB--;
+      else if (remainingB == 0) remainingB = -1;
+      else if (remainingB < 0 && remainingB > -60) remainingB--;
+    }
+    if(remainingB == lastValB && isActiveB && !isLocB) { idleSecB++; if(idleSecB >= 60) isLocB = true; } 
+    else if (!isLocB) { idleSecB = 0; }
+    lastValB = remainingB;
+
+    updatePhysicalDisplay(displayA, remainingA, isLocA); 
+    updatePhysicalDisplay(displayB, remainingB, isLocB);
+
+    static int cloudCounter = 0;
+    if(++cloudCounter >= 2) {
+       cloudCounter = 0;
+       String payload = "{\"id\":\""+meterID+"\",\"remA\":"+String(remainingA)+",\"locA\":"+(isLocA?"true":"false")+",\"remB\":"+String(remainingB)+",\"locB\":"+(isLocB?"true":"false")+",\"pay\":"+String(pendingPay)+"}";
+       
+       // NEW: Only reset the Watchdog if the message successfully leaves the antenna
+       if (client.publish(("city/street1/" + meterID + "/status").c_str(), payload.c_str())) {
+           lastSuccessfulCloudUpdate = millis();
+       }
+       
+       pendingPay = 0; 
+    }
+  }
+}
