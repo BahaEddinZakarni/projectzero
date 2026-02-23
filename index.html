@@ -2,179 +2,160 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Smart City - Parking Office V4.3</title>
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <title>Smart City - Parking Office V5.4</title>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
+    
     <style>
         :root { 
-            --bg: #0f172a; 
-            --card: #1e293b; 
-            --text: #f8fafc; 
-            --accent: #38bdf8; 
+            --bg: #f1f5f9; 
+            --card: #ffffff; 
+            --text: #0f172a; 
+            --accent: #0284c7; 
             --red: #ef4444; 
-            --green: #22c55e; 
+            --green: #16a34a; 
             --orange: #f97316;
+            --border: #e2e8f0;
         }
         
         body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); padding: 20px; margin: 0; }
-        
-        /* Stats Grid */
+        h1 { color: var(--text); font-weight: 800; border-bottom: 3px solid var(--accent); display: inline-block; margin-bottom: 30px; }
+
         .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin-bottom: 30px; }
-        .stat-card { background: var(--card); padding: 20px; border-radius: 12px; text-align: center; border: 1px solid #334155; }
-        .stat-card div { font-size: 2.5rem; font-weight: bold; margin-top: 10px; }
-
-        /* Table Styling */
-        table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 12px; overflow: hidden; }
-        th { background: #334155; padding: 15px; text-align: left; color: #94a3b8; }
-        td { padding: 12px 15px; border-bottom: 1px solid #334155; font-family: 'Courier New', monospace; }
-        
-        /* Compact Gear Box (V4.1 Fix) */
-        .action-select { 
-            background: #334155; 
-            color: white; 
-            border: 1px solid #475569; 
-            border-radius: 4px; 
-            width: 34px;           
-            height: 28px;          
-            cursor: pointer; 
-            font-size: 14px;       
-            text-align: center;
-            padding-left: 4px;     
-            margin-right: 15px;    
-            line-height: 28px;
-            appearance: none;      
-            -webkit-appearance: none;
+        .stat-card { 
+            background: var(--card); padding: 20px; border-radius: 12px; text-align: center; 
+            border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); 
         }
+        .stat-card h2 { color: #64748b; font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0; }
+        .stat-card div { font-size: 2.5rem; font-weight: 800; margin-top: 10px; }
 
-        /* Status Badges */
-        .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; margin-right: 8px; }
+        .btn-reset-rev { 
+            margin-top: 10px; padding: 4px 12px; background: #f8fafc; border: 1px solid var(--border); 
+            border-radius: 6px; cursor: pointer; font-size: 0.7rem; color: #64748b; font-weight: bold; transition: all 0.2s;
+        }
+        .btn-reset-rev:hover { background: var(--red); color: white; border-color: var(--red); }
+
+        table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 12px; overflow: hidden; border: 1px solid var(--border); }
+        th { background: #f8fafc; padding: 15px; text-align: left; color: #64748b; font-size: 0.8rem; border-bottom: 2px solid var(--border); }
+        td { padding: 12px 15px; border-bottom: 1px solid var(--border); font-family: 'Courier New', monospace; font-weight: 600; }
+        
+        .action-select { 
+            background: #f8fafc; color: var(--text); border: 1px solid var(--border); 
+            border-radius: 4px; width: 34px; height: 28px; cursor: pointer; font-size: 14px;       
+            text-align: center; padding-left: 4px; margin-right: 15px; line-height: 28px;
+            appearance: none; -webkit-appearance: none;
+        }
+        .action-select:hover { border-color: var(--accent); background: white; }
+
+        .status-badge { padding: 4px 8px; border-radius: 4px; font-size: 0.7rem; font-weight: bold; margin-right: 8px; color: white; }
         .bg-red { background: var(--red); } 
         .bg-green { background: var(--green); } 
         .bg-yellow { background: #eab308; color: black; }
-        .bg-gray { background: #64748b; }
+        .bg-gray { background: #94a3b8; }
         .flex-cell { display: flex; align-items: center; justify-content: flex-start; }
 
-        /* Heartbeat Flash Animation (Restored in V4.2) */
         .ping-alert { 
-            animation: flash 0.8s infinite; 
-            color: white !important;
-            font-weight: bold;
-            border-radius: 4px;
-            text-align: center;
+            animation: flash 0.8s infinite; color: white !important; font-weight: bold; border-radius: 4px; text-align: center; 
         }
-        @keyframes flash { 
-            0%, 100% { background: var(--red); } 
-            50% { background: var(--orange); } 
-        }
+        @keyframes flash { 0%, 100% { background: var(--red); } 50% { background: var(--orange); } }
 
-        /* Modal Overlay */
         #modal-overlay { 
             display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(0,0,0,0.8); z-index: 1000; align-items: center; justify-content: center; 
+            background: rgba(15, 23, 42, 0.6); backdrop-filter: blur(4px); z-index: 1000; align-items: center; justify-content: center; 
         }
         .modal-box { 
-            background: var(--card); padding: 30px; border-radius: 12px; 
-            border: 2px solid var(--accent); text-align: center; 
+            background: var(--card); padding: 30px; border-radius: 12px; box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+            border: 1px solid var(--border); text-align: center; max-width: 400px;
         }
         .time-box { 
-            width: 50px; padding: 8px; background: var(--bg); border: 1px solid #475569; 
-            color: var(--accent); font-size: 1.2rem; text-align: center; border-radius: 4px; 
+            width: 50px; padding: 8px; background: var(--bg); border: 1px solid var(--border); 
+            color: var(--text); font-size: 1.2rem; text-align: center; border-radius: 4px; font-weight: bold;
         }
-
-        .loc-input { background: transparent; color: var(--accent); border: 1px solid #334155; padding: 4px; border-radius: 4px; width: 90%; }
+        .loc-input { background: #f8fafc; color: var(--accent); border: 1px solid var(--border); padding: 6px; border-radius: 4px; width: 90%; font-weight: bold; }
     </style>
 </head>
 <body>
 
     <div id="modal-overlay">
         <div class="modal-box">
-            <h3>Set Custom Time (00h:00m:00s)</h3>
-            <div style="margin: 20px 0; color: white;">
+            <h3 style="margin-top:0">Set Custom Time</h3>
+            <div style="margin: 20px 0;">
                 <input type="number" id="h-in" class="time-box" placeholder="00">h :
                 <input type="number" id="m-in" class="time-box" placeholder="00">m :
                 <input type="number" id="s-in" class="time-box" placeholder="00">s
             </div>
-            <button onclick="submitCustomTime()" style="background:var(--green); color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer; font-weight:bold;">SEND TO METER</button>
-            <button onclick="closeModal()" style="background:#475569; color:white; padding:10px 20px; border:none; border-radius:5px; cursor:pointer; margin-left:10px;">CANCEL</button>
+            <button onclick="submitCustomTime()" style="background:var(--accent); color:white; padding:12px 24px; border:none; border-radius:6px; cursor:pointer; font-weight:bold;">SEND TO METER</button>
+            <button onclick="closeModal()" style="background:#64748b; color:white; padding:12px 24px; border:none; border-radius:6px; cursor:pointer; margin-left:10px;">CANCEL</button>
         </div>
     </div>
 
-    <h1>🏙️ Parking Command Center V4.3</h1>
+    <h1>🏙️ Parking Command Center V5.4</h1>
 
     <div class="grid">
         <div class="stat-card"><h2>Active Nodes</h2><div id="total-meters">0</div></div>
         <div class="stat-card"><h2>Violations</h2><div id="total-violations" style="color:var(--red)">0</div></div>
-        <div class="stat-card"><h2>Total Revenue</h2><div id="total-revenue" style="color:var(--green)">$0.00</div></div>
+        <div class="stat-card">
+            <h2>Total Paid Revenue</h2>
+            <div id="total-revenue" style="color:var(--green)">$0.00</div>
+            <button class="btn-reset-rev" onclick="resetRevenue()">RESET DATA</button>
+        </div>
     </div>
 
     <table id="meter-table">
         <thead>
-            <tr>
-                <th>MAC ID</th>
-                <th>Location Assignment</th>
-                <th>Slot A</th>
-                <th>Slot B</th>
-                <th>Heartbeat</th>
-            </tr>
+            <tr><th>MAC ID</th><th>Location Assignment</th><th>Slot A</th><th>Slot B</th><th>Heartbeat</th></tr>
         </thead>
         <tbody></tbody>
     </table>
 
     <script>
-        const mqtt_url = "wss://c335c915f7a540bcb9d83b6f4b0444f3.s1.eu.hivemq.cloud:8884/mqtt";
-        const options = { username: 'esp32_worker', password: 'ParkMaster2026' };
-        
+        // FIREBASE INITIALIZATION
+        const firebaseConfig = {
+            apiKey: "AIzaSyC8bGSil04ps-fJpcOIBemiQ5cMLp9FVgQ",
+            authDomain: "parking-system-6ae17.firebaseapp.com",
+            databaseURL: "https://parking-system-6ae17-default-rtdb.europe-west1.firebasedatabase.app",
+            projectId: "parking-system-6ae17",
+            storageBucket: "parking-system-6ae17.firebasestorage.app",
+            messagingSenderId: "219719794443",
+            appId: "1:219719794443:web:07ef943ea46be7e19d6c0e"
+        };
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
         let meters = {};
-        let totalRevenue = parseFloat(localStorage.getItem('savedRev')) || 0;
         let currentTarget = { id: '', slot: '' };
-        
-        // Flags to distinguish manual jumps from coin jumps
-        let ignoreNextA = {}; 
-        let ignoreNextB = {};
-        let offlineState = {}; // Tracks which meters are already offline to prevent sound looping
+        let offlineState = {}; 
 
-        let localRegistry = JSON.parse(localStorage.getItem('meterLocations')) || {};
-
-        // --- AUDIO ALERT LOGIC ---
+        // SOUND LOGIC (INTACT)
         function playAlertSound() {
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const oscillator = audioCtx.createOscillator();
             const gainNode = audioCtx.createGain();
-
             oscillator.type = 'sine';
-            oscillator.frequency.setValueAtTime(880, audioCtx.currentTime); // High pitch A5
+            oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
             oscillator.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.5); 
-
             gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
             gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
-
             oscillator.connect(gainNode);
             gainNode.connect(audioCtx.destination);
-
-            oscillator.start();
-            oscillator.stop(audioCtx.currentTime + 0.5);
+            oscillator.start(); oscillator.stop(audioCtx.currentTime + 0.5);
         }
 
-        const client = mqtt.connect(mqtt_url, options);
-        client.on('connect', () => client.subscribe('city/street1/+/status'));
+        // REVENUE LOGIC (CLOUD)
+        db.ref('global_stats/totalRevenue').on('value', (snap) => {
+            document.getElementById('total-revenue').innerText = "$" + (snap.val() || 0).toFixed(2);
+        });
 
-        client.on('message', (topic, message) => {
-            const data = JSON.parse(message.toString());
-            const id = data.id;
-
-            if (meters[id]) {
-                // Check for revenue jumps (Smart Filter)
-                if (data.remA > meters[id].remA + 10) {
-                    if (ignoreNextA[id]) ignoreNextA[id] = false;
-                    else totalRevenue += (data.remA - meters[id].remA) / 1800;
-                }
-                if (data.remB > meters[id].remB + 10) {
-                    if (ignoreNextB[id]) ignoreNextB[id] = false;
-                    else totalRevenue += (data.remB - meters[id].remB) / 1800;
-                }
+        function resetRevenue() {
+            if (confirm("Reset cloud revenue counter to $0.00?")) {
+                db.ref('global_stats/totalRevenue').set(0);
             }
-            
-            meters[id] = { ...data, lastSeen: Date.now() };
-            localStorage.setItem('savedRev', totalRevenue);
+        }
+
+        // METER DATA SYNC
+        db.ref('meters').on('value', (snapshot) => {
+            meters = snapshot.val() || {};
             updateUI();
         });
 
@@ -191,7 +172,7 @@
                     row = tbody.insertRow(); row.id = 'row-' + id;
                     row.innerHTML = `
                         <td><code>${id}</code></td>
-                        <td><input type="text" class="loc-input" id="in-${id}" onchange="localRegistry['${id}']=this.value; localStorage.setItem('meterLocations', JSON.stringify(localRegistry))"></td>
+                        <td><input type="text" class="loc-input" id="in-${id}" onchange="updateNickname('${id}', this.value)"></td>
                         <td>
                             <div class="flex-cell">
                                 <select class="action-select" onchange="handleAction('${id}','A',this.value);this.value=''">
@@ -216,22 +197,16 @@
                         </td>
                         <td id="p-${id}"></td>
                     `;
-                    document.getElementById('in-' + id).value = localRegistry[id] || "";
                 }
 
+                document.getElementById('in-' + id).value = m.nickname || "";
                 if (m.locA || m.locB) violations++;
-
-                // Heartbeat & Sound Alert Logic
-                const isDead = (now - m.lastSeen) > 30000;
+                
+                const isDead = (now - m.lastSeen) > 35000;
                 const pCell = document.getElementById(`p-${id}`);
                 
-                // Trigger sound only once when state changes to offline
-                if (isDead && !offlineState[id]) {
-                    playAlertSound();
-                    offlineState[id] = true;
-                } else if (!isDead) {
-                    offlineState[id] = false;
-                }
+                if (isDead && !offlineState[id]) { playAlertSound(); offlineState[id] = true; } 
+                else if (!isDead) { offlineState[id] = false; }
 
                 pCell.innerText = new Date(m.lastSeen).toLocaleTimeString() + (isDead ? " (OFFLINE)" : "");
                 pCell.className = isDead ? 'ping-alert' : '';
@@ -242,18 +217,17 @@
 
             document.getElementById('total-meters').innerText = Object.keys(meters).length;
             document.getElementById('total-violations').innerText = violations;
-            document.getElementById('total-revenue').innerText = "$" + totalRevenue.toFixed(2);
         }
 
+        // COMMAND HANDLING
         function handleAction(id, slot, action) {
             if (action === "custom") {
                 currentTarget = { id, slot };
                 document.getElementById('modal-overlay').style.display = 'flex';
-            } else if (action === "reset") {
-                if(slot === 'A') ignoreNextA[id] = true; else ignoreNextB[id] = true;
-                client.publish(`city/street1/${id}/cmd`, action + slot);
             } else if (action) {
-                client.publish(`city/street1/${id}/cmd`, action + slot);
+                // Maps your V4.4 gear actions to Firebase commands
+                let cmd = action === "reset" ? "RESET" : "LOCK";
+                sendCmd(id, slot, cmd);
             }
         }
 
@@ -262,12 +236,21 @@
             const m = parseInt(document.getElementById('m-in').value) || 0;
             const s = parseInt(document.getElementById('s-in').value) || 0;
             const totalSecs = (h * 3600) + (m * 60) + s;
-            
-            if (currentTarget.slot === 'A') ignoreNextA[currentTarget.id] = true;
-            else ignoreNextB[currentTarget.id] = true;
-
-            client.publish(`city/street1/${currentTarget.id}/cmd`, `add:${totalSecs}${currentTarget.slot}`);
+            sendCmd(currentTarget.id, currentTarget.slot, "ADD_TIME", totalSecs);
             closeModal();
+        }
+
+        function sendCmd(id, slot, action, value = 0) {
+            db.ref('commands/' + id).set({
+                action: action,
+                slot: slot,
+                value: value,
+                timestamp: Date.now()
+            });
+        }
+
+        function updateNickname(id, val) {
+            db.ref('meters/' + id).update({ nickname: val });
         }
 
         function formatTime(s) {
