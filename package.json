@@ -1,0 +1,13 @@
+{
+  "name": "parking-cloud-listener",
+  "version": "1.0.0",
+  "description": "Background bridge between HiveMQ and Firebase",
+  "main": "listener.js",
+  "scripts": {
+    "start": "node listener.js"
+  },
+  "dependencies": {
+    "mqtt": "^5.0.0",
+    "firebase-admin": "^11.0.0"
+  }
+}
