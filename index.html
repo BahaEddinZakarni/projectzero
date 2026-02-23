@@ -123,6 +123,12 @@
         firebase.initializeApp(firebaseConfig);
         const db = firebase.database();
 
+        // --- NEW: SERVER TIME SYNC OFFSET ---
+        let serverOffset = 0;
+        db.ref('.info/serverTimeOffset').on('value', (snap) => {
+            serverOffset = snap.val() || 0;
+        });
+
         let meters = {};
         let currentTarget = { id: '', slot: '' };
         let offlineState = {}; 
@@ -161,8 +167,13 @@
 
         function updateUI() {
             const tbody = document.querySelector('#meter-table tbody');
-            const now = Date.now();
+            
+            // Use the offset to calculate true server time
+            const now = Date.now() + serverOffset; 
+            
             let violations = 0;
+            let activeNodes = 0;
+            const totalNodes = Object.keys(meters).length;
 
             for (const id in meters) {
                 const m = meters[id];
@@ -200,9 +211,17 @@
                 }
 
                 document.getElementById('in-' + id).value = m.nickname || "";
-                if (m.locA || m.locB) violations++;
                 
+                // Count slots independently for violations
+                if (m.locA) violations++;
+                if (m.locB) violations++;
+                
+                // 35-second threshold calculated against synced time
                 const isDead = (now - m.lastSeen) > 35000;
+                
+                // Track active nodes
+                if (!isDead) activeNodes++;
+
                 const pCell = document.getElementById(`p-${id}`);
                 
                 if (isDead && !offlineState[id]) { playAlertSound(); offlineState[id] = true; } 
@@ -215,7 +234,7 @@
                 updateStatusCell(`statB-${id}`, m.remB, m.locB);
             }
 
-            document.getElementById('total-meters').innerText = Object.keys(meters).length;
+            document.getElementById('total-meters').innerText = `${activeNodes} / ${totalNodes}`;
             document.getElementById('total-violations').innerText = violations;
         }
 
@@ -225,7 +244,6 @@
                 currentTarget = { id, slot };
                 document.getElementById('modal-overlay').style.display = 'flex';
             } else if (action) {
-                // Maps your V4.4 gear actions to Firebase commands
                 let cmd = action === "reset" ? "RESET" : "LOCK";
                 sendCmd(id, slot, cmd);
             }
@@ -245,7 +263,8 @@
                 action: action,
                 slot: slot,
                 value: value,
-                timestamp: Date.now()
+                // Client-side synced timestamp for commands
+                timestamp: firebase.database.ServerValue.TIMESTAMP
             });
         }
 
