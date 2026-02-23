@@ -2,7 +2,7 @@ const mqtt = require('mqtt');
 const admin = require('firebase-admin');
 const http = require('http');
 
-// --- 1. THE DUMMY SERVER ---
+// --- 1. THE DUMMY SERVER (Keeps Render happy) ---
 const server = http.createServer((req, res) => {
   res.writeHead(200);
   res.end("Cloud Listener is running!");
@@ -30,39 +30,44 @@ client.on('connect', () => {
   client.subscribe('city/street1/+/status');
 });
 
-// FLOW: ESP32 -> Firebase (With Revenue Fix)
+// FLOW: ESP32 -> Firebase (With Whole Dollar Revenue Fix)
 client.on('message', async (topic, message) => {
   try {
     const data = JSON.parse(message.toString());
     const macId = data.id;
 
-    // Get old data once to check for revenue jumps
+    // Get the previous state from Firebase
     const snapshot = await db.ref('meters/' + macId).once('value');
     const oldData = snapshot.val() || { remA: 0, remB: 0 };
     
-    let addedRevenue = 0;
-    const SEC_PER_DOLLAR = 1800; // Adjust based on your rate
+    let totalAddedThisCycle = 0;
 
-    // Calculate Slot A jump
-    if (data.remA > oldData.remA) {
-        let jump = data.remA - oldData.remA;
-        if (jump > 10) addedRevenue += (jump / SEC_PER_DOLLAR);
-    }
-    // Calculate Slot B jump
-    if (data.remB > oldData.remB) {
-        let jump = data.remB - oldData.remB;
-        if (jump > 10) addedRevenue += (jump / SEC_PER_DOLLAR);
-    }
+    // HELPER: Detects specific payment jumps only (1, 2, 5, 10)
+    const getPaymentValue = (newTime, oldTime) => {
+        let jump = newTime - oldTime;
+        
+        // Match jumps to your payment tiers (assuming 1800s per $1)
+        if (jump >= 1700 && jump <= 1900) return 1;   // $1 jump
+        if (jump >= 3500 && jump <= 3700) return 2;   // $2 jump
+        if (jump >= 8900 && jump <= 9100) return 5;   // $5 jump
+        if (jump >= 17900 && jump <= 18100) return 10; // $10 jump
 
-    // Update Global Revenue if money was added
-    if (addedRevenue > 0) {
+        return 0; // Ignore decimals, noise, or grace periods
+    };
+
+    // Check both slots for whole dollar payments
+    totalAddedThisCycle += getPaymentValue(data.remA, oldData.remA);
+    totalAddedThisCycle += getPaymentValue(data.remB, oldData.remB);
+
+    // Update Global Revenue if a whole dollar payment was detected
+    if (totalAddedThisCycle > 0) {
         await db.ref('global_stats/totalRevenue').transaction((current) => {
-            return (current || 0) + addedRevenue;
+            return (current || 0) + totalAddedThisCycle;
         });
-        console.log(`💰 Revenue Added: $${addedRevenue.toFixed(2)}`);
+        console.log(`💰 Payment Verified: +$${totalAddedThisCycle}`);
     }
 
-    // Update Meter Status
+    // Update the meter status (including lastSeen for connection status)
     await db.ref('meters/' + macId).update({ 
         ...data, 
         lastSeen: Date.now() 
@@ -71,18 +76,23 @@ client.on('message', async (topic, message) => {
   } catch (e) { console.error("Sync Error:", e); }
 });
 
-// --- 4. COMMAND LOGIC (Dashboard -> ESP32) ---
+// --- 4. COMMAND LOGIC (Firebase -> MQTT) ---
 db.ref('commands').on('child_changed', (snapshot) => {
     const cmd = snapshot.val();
     const macId = snapshot.key;
     let mqttPayload = "";
 
-    if (cmd.action === "RESET") mqttPayload = "reset" + cmd.slot;
-    else if (cmd.action === "LOCK") mqttPayload = "forceLoc" + cmd.slot;
-    else if (cmd.action === "ADD_TIME") mqttPayload = `add:${cmd.value}${cmd.slot}`;
+    if (cmd.action === "RESET") {
+        mqttPayload = "reset" + cmd.slot;
+    } else if (cmd.action === "LOCK") {
+        mqttPayload = "forceLoc" + cmd.slot;
+    } else if (cmd.action === "ADD_TIME") {
+        mqttPayload = `add:${cmd.value}${cmd.slot}`;
+    }
 
     if (mqttPayload) {
-        client.publish(`city/street1/${macId}/cmd`, mqttPayload);
-        console.log(`🚀 Sent to ${macId}: ${mqttPayload}`);
+        const topic = `city/street1/${macId}/cmd`;
+        client.publish(topic, mqttPayload);
+        console.log(`🚀 Command Sent to ${macId}: ${mqttPayload}`);
     }
 });
