@@ -12,6 +12,7 @@ server.listen(process.env.PORT || 10000, '0.0.0.0', () => {
 });
 
 // --- 2. FIREBASE INITIALIZATION ---
+// Uses the Environment Variables you set in Render
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -30,58 +31,39 @@ client.on('connect', () => {
   client.subscribe('city/street1/+/status');
 });
 
-// FLOW: ESP32 -> Firebase (With Whole Dollar Revenue Fix)
+// FLOW: ESP32 -> Firebase (Now using hardware-detected revenue)
 client.on('message', async (topic, message) => {
   try {
     const data = JSON.parse(message.toString());
     const macId = data.id;
 
-    // Get the previous state from Firebase
-    const snapshot = await db.ref('meters/' + macId).once('value');
-    const oldData = snapshot.val() || { remA: 0, remB: 0 };
-    
-    let totalAddedThisCycle = 0;
-
-    // HELPER: Detects specific payment jumps only (1, 2, 5, 10)
-    const getPaymentValue = (newTime, oldTime) => {
-        let jump = newTime - oldTime;
-        
-        // Match jumps to your payment tiers (assuming 1800s per $1)
-        if (jump >= 1700 && jump <= 1900) return 1;   // $1 jump
-        if (jump >= 3500 && jump <= 3700) return 2;   // $2 jump
-        if (jump >= 8900 && jump <= 9100) return 5;   // $5 jump
-        if (jump >= 17900 && jump <= 18100) return 10; // $10 jump
-
-        return 0; // Ignore decimals, noise, or grace periods
-    };
-
-    // Check both slots for whole dollar payments
-    totalAddedThisCycle += getPaymentValue(data.remA, oldData.remA);
-    totalAddedThisCycle += getPaymentValue(data.remB, oldData.remB);
-
-    // Update Global Revenue if a whole dollar payment was detected
-    if (totalAddedThisCycle > 0) {
+    // A. REVENUE: If the ESP32 detected a coin, it sends a 'pay' value (1, 2, 5, or 10)
+    if (data.pay && data.pay > 0) {
         await db.ref('global_stats/totalRevenue').transaction((current) => {
-            return (current || 0) + totalAddedThisCycle;
+            return (current || 0) + data.pay;
         });
-        console.log(`💰 Payment Verified: +$${totalAddedThisCycle}`);
+        console.log(`💰 Verified Payment from ${macId}: +$${data.pay}`);
     }
 
-    // Update the meter status (including lastSeen for connection status)
+    // B. STATUS: Update the meter info (remA, locA, remB, locB)
     await db.ref('meters/' + macId).update({ 
-        ...data, 
+        remA: data.remA,
+        locA: data.locA,
+        remB: data.remB,
+        locB: data.locB,
         lastSeen: Date.now() 
     });
     
-  } catch (e) { console.error("Sync Error:", e); }
+  } catch (e) { console.error("Data Processing Error:", e); }
 });
 
-// --- 4. COMMAND LOGIC (Firebase -> MQTT) ---
+// --- 4. COMMAND LOGIC (Dashboard -> Firebase -> MQTT) ---
 db.ref('commands').on('child_changed', (snapshot) => {
     const cmd = snapshot.val();
     const macId = snapshot.key;
     let mqttPayload = "";
 
+    // Map Dashboard actions to the ESP32 command strings
     if (cmd.action === "RESET") {
         mqttPayload = "reset" + cmd.slot;
     } else if (cmd.action === "LOCK") {
