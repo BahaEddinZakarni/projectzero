@@ -10,7 +10,7 @@ const server = http.createServer((req, res) => {
 });
 server.listen(PORT, '0.0.0.0');
 
-// --- 2. FIREBASE ---
+// --- 2. FIREBASE INITIALIZATION ---
 const serviceAccount = JSON.parse(process.env.FIREBASE_KEY);
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -18,7 +18,7 @@ admin.initializeApp({
 });
 const db = admin.database();
 
-// --- 3. MQTT SETTINGS ---
+// --- 3. MQTT SETTINGS (Anti-Ghosting Config) ---
 const mqttOptions = {
   username: 'esp32_worker',
   password: 'ParkMaster2026',
@@ -32,7 +32,7 @@ const mqttOptions = {
 const client = mqtt.connect("wss://c335c915f7a540bcb9d83b6f4b0444f3.s1.eu.hivemq.cloud:8884/mqtt", mqttOptions);
 
 client.on('connect', () => {
-  console.log("✅ Connected to HiveMQ");
+  console.log("✅ Bridge connected to HiveMQ");
   client.subscribe('city/street1/+/status');
 });
 
@@ -41,19 +41,24 @@ client.on('message', async (topic, message) => {
     const data = JSON.parse(message.toString());
     const macId = data.id;
 
+    // A. REVENUE: Using the hardware-detected 'pay' value
     if (data.pay && data.pay > 0) {
         await db.ref('global_stats/totalRevenue').transaction(c => (c || 0) + data.pay);
+        console.log(`💰 Payment: +$${data.pay} from ${macId}`);
     }
 
+    // B. STATUS: FIXED TIMESTAMP LOGIC
     await db.ref('meters/' + macId).update({ 
-        remA: data.remA, locA: data.locA,
-        remB: data.remB, locB: data.locB,
-        lastSeen: Date.now() 
+        remA: data.remA, 
+        locA: data.locA,
+        remB: data.remB, 
+        locB: data.locB,
+        lastSeen: admin.database.ServerValue.TIMESTAMP // <--- Server-side sync fix
     });
-  } catch (e) { console.error("Error:", e); }
+  } catch (e) { console.error("Data Error:", e); }
 });
 
-// --- 4. COMMAND LOGIC ---
+// --- 4. COMMAND LOGIC (Dashboard -> Firebase -> MQTT) ---
 db.ref('commands').on('child_changed', (snapshot) => {
     const cmd = snapshot.val();
     const macId = snapshot.key;
@@ -64,5 +69,6 @@ db.ref('commands').on('child_changed', (snapshot) => {
 
     if (payload && client.connected) {
         client.publish(`city/street1/${macId}/cmd`, payload);
+        console.log(`🚀 Sent to ${macId}: ${payload}`);
     }
 });
